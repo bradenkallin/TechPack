@@ -1,10 +1,10 @@
 // Location tracking reported to a Phant server over GSM
+// RFID assets reported to a Phant server over GSM
+// LED and button controls
+//
 // Author: Braden Kallin
 //
 // Inspired by the code from Marco Schwartz and Tony DiCola
-//
-// Released under a MIT license:
-// https://opensource.org/licenses/MIT
 
 // Libraries
 //#include <Adafruit_SleepyDog.h>
@@ -13,12 +13,6 @@
 #include <Wire.h>
 #include <SPI.h>
 #include <Adafruit_PN532.h>
-
-// Latitude & longitude
-float latitude, longitude, speed_kph, heading, altitude;
-
-// GPS fix status
-int fix;
 
 // Define I2C Pins for PN532
 #define PN532_IRQ   (2)
@@ -33,6 +27,12 @@ Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
 // FONA instance & configuration
 SoftwareSerial fonaSS = SoftwareSerial(FONA_TX, FONA_RX);     // FONA software serial connection.
 Adafruit_FONA fona = Adafruit_FONA(FONA_RST);                 // FONA library connection.
+
+// Latitude & longitude
+float latitude, longitude, speed_kph, heading, altitude;
+
+// GPS fix status
+int fix;
 
 void setup() {
   
@@ -54,6 +54,7 @@ void loop() {
   checkRFID();
 }
 
+// Mifare Card handling code
 void checkRFID(void){
   uint8_t success;
   uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };  // Buffer to store the returned UID
@@ -68,7 +69,9 @@ void checkRFID(void){
   if (success) {
   // Display some basic information about the card
   Serial.println(F("Found an ISO14443A card"));
-  Serial.print(F("  UID Length: "));Serial.print(uidLength, DEC);Serial.println(" bytes");
+  Serial.print(F("  UID Length: "));
+  Serial.print(uidLength, DEC);
+  Serial.println(" bytes");
   Serial.print(F("  UID Value: "));
   nfc.PrintHex(uid, uidLength);
   Serial.println(F(""));
