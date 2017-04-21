@@ -6,4 +6,6 @@ The intended function is to report GPS location and RFID assets
 to a Phant server over a GSM connection.
 
 Most of this code was copied from Adafruit repositories and
-other IoT projects, and is not actively maintained.
+other IoT projects, and is not finished or actively maintained.
+
+Unfinished code is marked with !! in comments

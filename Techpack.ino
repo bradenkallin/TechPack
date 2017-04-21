@@ -45,16 +45,23 @@ void setup() {
 
   // Use the watchdog to simplify retry logic and make things more robust.
   // Enable this after FONA is intialized because FONA init takes forever.
-  //Watchdog.enable(30000);
-  //Watchdog.reset(); 
+  // Watchdog.enable(30000);
+  // Watchdog.reset(); 
 }
 
+// !! Currently checks for cards and posts location as quickly as possible
+// !! Need to add timing code
 void loop() {
   postLocation();
+  // !! Currently only reads cards, and does not record them anywhere.
   checkRFID();
+  // !! Need code to handle onboard buttons.
+  // !! Need code to handle SMS activated lights
 }
 
-// Mifare Card handling code
+// !! Need to implement postRFID code to post RFID card data. 
+// !! Need to store RFID tag IDs in EEPROM for robustness.
+// Mifare Card handling
 void checkRFID(void){
   uint8_t success;
   uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };  // Buffer to store the returned UID
@@ -151,7 +158,7 @@ void checkRFID(void){
   }
 }
 
-
+// Location handling and reporting
 void postLocation(void){
   //Sparkfun URL Building
   const String publicKey = "5JDdvbVgx6urREAVgKOM"; //Public Key for data stream
