@@ -7,12 +7,13 @@
 // Inspired by the code from Marco Schwartz and Tony DiCola
 
 // Libraries
-//#include <Adafruit_SleepyDog.h>
+
 #include <SoftwareSerial.h>
 #include "Adafruit_FONA.h"
 #include <Wire.h>
 #include <SPI.h>
 #include <Adafruit_PN532.h>
+#include <EEPROM.h>
 
 // Define I2C Pins for PN532
 #define PN532_IRQ   (2)
@@ -28,11 +29,18 @@ Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
 SoftwareSerial fonaSS = SoftwareSerial(FONA_TX, FONA_RX);     // FONA software serial connection.
 Adafruit_FONA fona = Adafruit_FONA(FONA_RST);                 // FONA library connection.
 
-// Latitude & longitude
-float latitude, longitude, speed_kph, heading, altitude;
+// GPS variables
+const unsigned long updateLocTime = 300000;
+float latitude, longitude, speed_kph, heading, altitude = 0;
+int fix = 0;
 
-// GPS fix status
-int fix;
+// RFID variables
+const uint8_t UIDs[5][7] = {{0,0,0,0x5B,0x1B,0x4C,0x21},{0,0,0,0x8B,0x31,0x4C,0x21},
+                            {0,0,0,0xFB,0x27,0x4C,0x21},{0,0,0,0xEB,0x17,0x48,0x21},
+                            {0,0,0,0xAB,0x19,0x4C,0x21}};
+uint8_t UIDstatus[5] = {0,0,0,0,0};
+const unsigned long statusTime = 5000;
+const uint8_t numTags = 5;
 
 void setup() {
   
@@ -43,20 +51,32 @@ void setup() {
   setupFONA();
   setupRFID();
 
-  // Use the watchdog to simplify retry logic and make things more robust.
-  // Enable this after FONA is intialized because FONA init takes forever.
-  // Watchdog.enable(30000);
-  // Watchdog.reset(); 
+  // Post location on startup.
+  postLocation();
 }
 
 // !! Currently checks for cards and posts location as quickly as possible
 // !! Need to add timing code
 void loop() {
-  postLocation();
   // !! Currently only reads cards, and does not record them anywhere.
   checkRFID();
+  
   // !! Need code to handle onboard buttons.
   // !! Need code to handle SMS activated lights
+
+  unsigned long currentStatusMillis = millis();
+  static unsigned long previousStatusMillis = 0;
+  if(currentStatusMillis - previousStatusMillis >= statusTime){
+    Serial.println(F("Still running!"));
+    previousStatusMillis = currentStatusMillis;
+  }
+
+  unsigned long currentLocMillis = millis();
+  static unsigned long previousLocMillis = 0;
+  if(currentLocMillis - previousLocMillis >= updateLocTime){
+    postLocation();
+    previousLocMillis = currentLocMillis;
+  }
 }
 
 // !! Need to implement postRFID code to post RFID card data. 
@@ -78,91 +98,54 @@ void checkRFID(void){
   Serial.println(F("Found an ISO14443A card"));
   Serial.print(F("  UID Length: "));
   Serial.print(uidLength, DEC);
-  Serial.println(" bytes");
+  Serial.println(F(" bytes"));
   Serial.print(F("  UID Value: "));
   nfc.PrintHex(uid, uidLength);
   Serial.println(F(""));
   
-  if (uidLength == 4)
-  {
-    // We probably have a Mifare Classic card ... 
-    Serial.println(F("Seems to be a Mifare Classic card (4 byte UID)"));
-    
-    // Now we need to try to authenticate it for read/write access
-    // Try with the factory default KeyA: 0xFF 0xFF 0xFF 0xFF 0xFF 0xFF
-    Serial.println(F("Trying to authenticate block 4 with default KEYA value"));
-    uint8_t keya[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
-    
-    // Start with block 4 (the first block of sector 1) since sector 0
-    // contains the manufacturer data and it's probably better just
-    // to leave it alone unless you know what you're doing
-    success = nfc.mifareclassic_AuthenticateBlock(uid, uidLength, 4, 0, keya);
-    
-    if (success)
+    if (uidLength == 4)
     {
-      Serial.println(F("Sector 1 (Blocks 4..7) has been authenticated"));
-      uint8_t data[16];
-      
-      // If you want to write something to block 4 to test with, uncomment
-      // the following line and this text should be read back in a minute
-      //memcpy(data, (const uint8_t[]){ 'a', 'd', 'a', 'f', 'r', 'u', 'i', 't', '.', 'c', 'o', 'm', 0, 0, 0, 0 }, sizeof data);
-      // success = nfc.mifareclassic_WriteDataBlock (4, data);
-  
-      // Try to read the contents of block 4
-      success = nfc.mifareclassic_ReadDataBlock(4, data);
-      
-      if (success)
-      {
-        // Data seems to have been read ... spit it out
-        Serial.println(F("Reading Block 4:"));
-        nfc.PrintHexChar(data, 16);
-        Serial.println(F(""));
-        
-        // Wait a bit before reading the card again
-        delay(1000);
+      // We probably have a Mifare Classic card ... 
+      Serial.println(F("Seems to be a Mifare Classic card (4 byte UID)"));
+
+      // Toggle the tag in or out if it's one of the registered tags
+      uint8_t i = 0;
+      uint8_t j = 0;
+      boolean match;
+      for(i = 0; i < numTags; i++){
+        match = true;
+        for(j = 0; j < 7; j++){
+          if(UIDs[i][j] != uid[j]){
+            match = false;
+          }
+        }
+        if(match){
+          UIDstatus[i] = UIDstatus[i] ^ 0xFF;
+          EEPROM.update(i,UIDstatus[i]);
+        }
       }
-      else
-      {
-        Serial.println(F("Ooops ... unable to read the requested block.  Try another key?"));
-      }
-    }
-    else
-    {
-      Serial.println(F("Ooops ... authentication failed: Try another key?"));
-    }
-  }
   
+      // wait a little bit before reading again.
+      delay(1000);
+      
+    }
+    
     if (uidLength == 7)
     {
       // We probably have a Mifare Ultralight card ...
       Serial.println(F("Seems to be a Mifare Ultralight tag (7 byte UID)"));
       
-      // Try to read the first general-purpose user page (#4)
-      Serial.println(F("Reading page 4"));
-      uint8_t data[32];
-      success = nfc.mifareultralight_ReadPage (4, data);
-      if (success)
-      {
-        // Data seems to have been read ... spit it out
-        nfc.PrintHexChar(data, 4);
-        Serial.println(F(""));
-        
-        // Wait a bit before reading the card again
-        delay(1000);
-      }
-      else
-      {
-        Serial.println(F("Ooops ... unable to read the requested page!?"));
-      }
+      // wait a little bit before reading again.
+      delay(1000);
     }
   }
 }
 
 // Location handling and reporting
-void postLocation(void){
+bool postLocation(void){
   //Sparkfun URL Building
-  const String publicKey = "5JDdvbVgx6urREAVgKOM"; //Public Key for data stream
-  const String privateKey = "7BEe4kl6xRC7jo2neKrx"; //Private Key for data stream
+  const String publicKey = F("5JDdvbVgx6urREAVgKOM"); //Public Key for data stream
+  const String privateKey = F("7BEe4kl6xRC7jo2neKrx"); //Private Key for data stream
   const byte NUM_FIELDS = 2; //number of fields in data stream
   const String fieldNames[NUM_FIELDS] = {"lat","long"}; //actual data fields
   float fieldData[NUM_FIELDS]; //holder for the data values
@@ -174,7 +157,7 @@ void postLocation(void){
   float latitude, longitude, speed_kph, heading, altitude;
   bool gpsFix = fona.getGPS(&fix, &latitude, &longitude, &speed_kph, &heading, &altitude);
 
-  if(fix == 1) {
+  if(gpsFix && fix == 1) {
 
     fieldData[0] = latitude;
     fieldData[1] = longitude;
@@ -187,18 +170,16 @@ void postLocation(void){
     printFloat(longitude, 5);
     Serial.println(F(""));
 
-    //Watchdog.reset();
-
     uint16_t statuscode;
     int16_t length;
     String url = "http://data.sparkfun.com/input/";
     url += publicKey;
-    url += "?private_key=";
+    url += F("?private_key=");
     url += privateKey;
     for (uint8_t i_url=0; i_url<NUM_FIELDS; i_url++) {
-      url += "&";
+      url += F("&");
       url += fieldNames[i_url];
-      url += "=";
+      url += F("=");
       url += String(fieldData[i_url],6);
     }
     char buf[255];
@@ -210,8 +191,6 @@ void postLocation(void){
       Serial.println(F("Failed!"));
     }
 
-    //Watchdog.reset();
-
     while (length > 0) {
       while (fona.available()) {
         char c = fona.read();
@@ -221,14 +200,14 @@ void postLocation(void){
     }
     fona.HTTP_GET_end();
 
-    //Watchdog.reset();
-
     Serial.println(F("Got fix and attempted to post. Waiting 5sec."));
     delay(5000);
 
+    return true;
   } 
   else {
     Serial.println(F("No Fix."));
+    return false;
   }
 }
 // =================== MISC FUNCTIONS ===================
@@ -278,7 +257,7 @@ void printFloat(float value, int places) {
 
   // write out the negative if needed
   if (value < 0)
-    Serial.print('-');
+    Serial.print(F("-"));
 
   if (tenscount == 0)
     Serial.print(0, DEC);
@@ -349,6 +328,15 @@ void setupRFID(void){
   
   // configure board to read RFID tags
   nfc.SAMConfig();
+
+  // Read asset status from EEPROM
+  for(uint8_t i = 0; i < numTags; i++){
+    UIDstatus[i] = EEPROM.read(i);
+    Serial.println(F("Tag "));
+    Serial.print(i);
+    Serial.print(F(" status:")); 
+    Serial.print(UIDstatus[i]);
+  }
   
   Serial.println(F("RFID setup OK!"));
 }
