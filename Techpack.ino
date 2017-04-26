@@ -98,7 +98,9 @@ void loop() {
     timeFlag = true;
   }
   if(timeFlag && (millis()-tagStartMillis>=tagTime)){
-    postRFID();
+    for(uint8_t i = 0; i < 4; i++){
+      if(postRFID()) break;
+    }
     timeFlag = false;
   }
 
