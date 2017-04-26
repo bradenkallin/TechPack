@@ -7,7 +7,6 @@
 // Inspired by the code from Marco Schwartz and Tony DiCola
 
 // Libraries
-
 #include <SoftwareSerial.h>
 #include "Adafruit_FONA.h"
 #include <Wire.h>
@@ -21,9 +20,12 @@
 Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
 
 // FONA pins configuration
-#define FONA_RX              8   // FONA serial RX pin (pin 2 for shield).
-#define FONA_TX              9   // FONA serial TX pin (pin 3 for shield).
-#define FONA_RST             10  // FONA reset pin (pin 4 for shield)
+#define FONA_RX     8   // FONA serial RX pin (pin 2 for shield).
+#define FONA_TX     9   // FONA serial TX pin (pin 3 for shield).
+#define FONA_RST    10  // FONA reset pin (pin 4 for shield)
+#define FONA_KEY    11  // FONA power button
+#define FONA_RI     12  // FONA ringer
+#define FONA_PS     13  // FONA power status
 
 // FONA instance & configuration
 SoftwareSerial fonaSS = SoftwareSerial(FONA_TX, FONA_RX);     // FONA software serial connection.
@@ -35,9 +37,9 @@ float latitude, longitude, speed_kph, heading, altitude = 0;
 int fix = 0;
 
 // RFID variables
-const uint8_t UIDs[5][7] = {{0,0,0,0x5B,0x1B,0x4C,0x21},{0,0,0,0x8B,0x31,0x4C,0x21},
-                            {0,0,0,0xFB,0x27,0x4C,0x21},{0,0,0,0xEB,0x17,0x48,0x21},
-                            {0,0,0,0xAB,0x19,0x4C,0x21}};
+const uint8_t UIDs[5][7] = {{0x5B,0x1B,0x4C,0x21,0,0,0},{0x8B,0x31,0x4C,0x21,0,0,0},
+                            {0xFB,0x27,0x4C,0x21,0,0,0},{0xEB,0x17,0x48,0x21,0,0,0},
+                            {0xAB,0x19,0x4C,0x21,0,0,0}};
 uint8_t UIDstatus[5] = {0,0,0,0,0};
 const unsigned long statusTime = 5000;
 const uint8_t numTags = 5;
@@ -51,16 +53,19 @@ void setup() {
   setupFONA();
   setupRFID();
 
-  // Post location on startup.
-  postLocation();
+  // Try 4 times to post location on startup.
+  for(uint8_t i = 0; i < 4; i++){
+    if(postLocation()) break;
+    delay(1000);
+  }
 }
 
 // !! Currently checks for cards and posts location as quickly as possible
 // !! Need to add timing code
 void loop() {
-  // !! Currently only reads cards, and does not record them anywhere.
   checkRFID();
-  
+
+  // !! Need code to post tag status
   // !! Need code to handle onboard buttons.
   // !! Need code to handle SMS activated lights
 
@@ -74,7 +79,10 @@ void loop() {
   unsigned long currentLocMillis = millis();
   static unsigned long previousLocMillis = 0;
   if(currentLocMillis - previousLocMillis >= updateLocTime){
-    postLocation();
+    for(uint8_t i = 0; i < 4; i++){
+     if(postLocation()) break;
+     delay(1000);
+    }
     previousLocMillis = currentLocMillis;
   }
 }
@@ -115,6 +123,8 @@ void checkRFID(void){
       for(i = 0; i < numTags; i++){
         match = true;
         for(j = 0; j < 7; j++){
+          //Serial.println(UIDs[i][j]);
+          //Serial.println(uid[j]);
           if(UIDs[i][j] != uid[j]){
             match = false;
           }
@@ -122,6 +132,12 @@ void checkRFID(void){
         if(match){
           UIDstatus[i] = UIDstatus[i] ^ 0xFF;
           EEPROM.update(i,UIDstatus[i]);
+          Serial.println(F(""));
+          Serial.print(F("Tag "));
+          Serial.print(i);
+          Serial.print(F(" status: ")); 
+          Serial.println(EEPROM.read(i));
+          postRFID();
         }
       }
   
@@ -141,6 +157,55 @@ void checkRFID(void){
   }
 }
 
+// Asset reporting
+bool postRFID(void){
+  //Sparkfun URL Building
+  const String publicKey = F("7vz3gGRdAnFlGJYdbpZ8"); //Public Key for data stream
+  const String privateKey = F("mqrWmkvRVxTRGq1a8bjd"); //Private Key for data stream
+  const byte NUM_FIELDS = 5; //number of fields in data stream
+  const String fieldNames[NUM_FIELDS] = {"tag0","tag1","tag2","tag3","tag4"}; //actual data fields
+
+    uint16_t statuscode;
+    int16_t length;
+    String url = "http://data.sparkfun.com/input/";
+    url += publicKey;
+    url += F("?private_key=");
+    url += privateKey;
+    for (uint8_t i_url=0; i_url<NUM_FIELDS; i_url++) {
+      url += F("&");
+      url += fieldNames[i_url];
+      url += F("=");
+      url += EEPROM.read(i_url);
+    }
+    url += F(" ");
+    char buf[255];
+    url.toCharArray(buf, url.length());
+
+    Serial.println(buf);
+
+    if (!fona.HTTP_GET_start(buf, &statuscode, (uint16_t *)&length)) {  
+      Serial.println(F("Failed to post assets!"));
+    }
+
+    while (length > 0) {
+      while (fona.available()) {
+        char c = fona.read();
+        Serial.write(c);
+        length--;
+      }
+    }
+    fona.HTTP_GET_end();
+
+    Serial.println(F("Attempted to post assets. Waiting 1sec."));
+    delay(1000);
+    return true;
+ 
+ 
+    Serial.println(F("No Fix."));
+    return false;
+ 
+}
+
 // Location handling and reporting
 bool postLocation(void){
   //Sparkfun URL Building
@@ -149,9 +214,6 @@ bool postLocation(void){
   const byte NUM_FIELDS = 2; //number of fields in data stream
   const String fieldNames[NUM_FIELDS] = {"lat","long"}; //actual data fields
   float fieldData[NUM_FIELDS]; //holder for the data values
-  
-  // Watchdog reset at start of loop--make sure every step takes less than 30ish seconds in normal operation!
-  //Watchdog.reset();
 
   // Grab a GPS reading.
   float latitude, longitude, speed_kph, heading, altitude;
@@ -182,13 +244,14 @@ bool postLocation(void){
       url += F("=");
       url += String(fieldData[i_url],6);
     }
+    url += F(" ");
     char buf[255];
     url.toCharArray(buf, url.length());
 
     Serial.println(buf);
 
     if (!fona.HTTP_GET_start(buf, &statuscode, (uint16_t *)&length)) {  
-      Serial.println(F("Failed!"));
+      Serial.println(F("Failed to post!"));
     }
 
     while (length > 0) {
@@ -202,7 +265,6 @@ bool postLocation(void){
 
     Serial.println(F("Got fix and attempted to post. Waiting 5sec."));
     delay(5000);
-
     return true;
   } 
   else {
@@ -288,6 +350,16 @@ void printFloat(float value, int places) {
 
 // =================== SETUP FUNCTIONS ===================
 void setupFONA(void){
+  pinMode(FONA_RI,INPUT);
+  pinMode(FONA_PS,INPUT);
+  pinMode(FONA_KEY,OUTPUT);
+
+  if(FONA_PS == LOW){
+    digitalWrite(FONA_KEY,LOW);
+    delay(2100);
+    digitalWrite(FONA_KEY,HIGH);
+  }
+  
   // Initialize the FONA module
   Serial.println(F("Initializing FONA....(may take 10 seconds)"));
   fonaSS.begin(4800);
@@ -300,10 +372,10 @@ void setupFONA(void){
   Serial.println(F("FONA is OK"));
 
   // Enable GPS.
-  while(!fona.enableGPS(true)){delay(500);}
+  while(!fona.enableGPS(true)){delay(1000);}
 
   // Enable GPRS
-  while(!fona.enableGPRS(true)){delay(500);}
+  while(!fona.enableGPRS(true)){delay(1000);}
 
   // Wait a little bit to stabilize the connection.
   delay(1000);
@@ -332,13 +404,11 @@ void setupRFID(void){
   // Read asset status from EEPROM
   for(uint8_t i = 0; i < numTags; i++){
     UIDstatus[i] = EEPROM.read(i);
-    Serial.println(F("Tag "));
+    Serial.print(F("Tag "));
     Serial.print(i);
-    Serial.print(F(" status:")); 
-    Serial.print(UIDstatus[i]);
+    Serial.print(F(" status: ")); 
+    Serial.println(UIDstatus[i]);
   }
   
   Serial.println(F("RFID setup OK!"));
 }
-
-
