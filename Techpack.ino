@@ -13,6 +13,15 @@
 #include <SPI.h>
 #include <Adafruit_PN532.h>
 #include <EEPROM.h>
+#include <Adafruit_NeoPixel.h>
+#include <avr/wdt.h>
+#include <avr/power.h>
+
+#define PIXEL_PIN 6
+#define BUTTON1 A0
+#define BUTTON2 A1
+#define BUTTON3 A2
+#define BUTTON4 A3
 
 // Define I2C Pins for PN532
 #define PN532_IRQ   (2)
@@ -20,19 +29,23 @@
 Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
 
 // FONA pins configuration
-#define FONA_RX     8   // FONA serial RX pin (pin 2 for shield).
-#define FONA_TX     9   // FONA serial TX pin (pin 3 for shield).
-#define FONA_RST    10  // FONA reset pin (pin 4 for shield)
+#define FONA_VREF   7
+#define FONA_RST    8   // FONA serial RX pin (pin 2 for shield).
+#define FONA_RX     9   // FONA serial TX pin (pin 3 for shield).
+#define FONA_TX     10  // FONA reset pin (pin 4 for shield)
 #define FONA_KEY    11  // FONA power button
 #define FONA_RI     12  // FONA ringer
 #define FONA_PS     13  // FONA power status
+
+// NeoPixel instance
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(7, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
 
 // FONA instance & configuration
 SoftwareSerial fonaSS = SoftwareSerial(FONA_TX, FONA_RX);     // FONA software serial connection.
 Adafruit_FONA fona = Adafruit_FONA(FONA_RST);                 // FONA library connection.
 
 // GPS variables
-const unsigned long updateLocTime = 300000;
+const unsigned long updateLocTime = 30000;
 float latitude, longitude, speed_kph, heading, altitude = 0;
 bool gpsSuccess = false;
 int fix = 0;
@@ -48,16 +61,43 @@ const unsigned long tagTime = 5000;
 
 // Misc vars
 const unsigned long statusTime = 5000;
+const unsigned long SMSTime = 15000;
 
 void setup() {
+  wdt_enable(WDTO_8S);
+
+  // button i/o setup
+  pinMode(BUTTON1, INPUT);
+  pinMode(BUTTON2, INPUT);
+  pinMode(BUTTON3, INPUT);
+  pinMode(BUTTON4, INPUT);
+  digitalWrite(BUTTON1, INPUT_PULLUP);
+  digitalWrite(BUTTON2, INPUT_PULLUP);
+  digitalWrite(BUTTON3, INPUT_PULLUP);
+  digitalWrite(BUTTON4, INPUT_PULLUP);
 
   // Initialize serial output.
   Serial.begin(115200);
   Serial.println(F("Geotracking with Adafruit IO & FONA808"));
 
-  setupFONA();
+  strip.begin();
+  strip.setPixelColor(0, strip.Color(75,40,0));
+  strip.setPixelColor(6, strip.Color(75,40,0));
+  strip.show();
+  
   setupRFID();
+  wdt_reset();
 
+  strip.setPixelColor(1, strip.Color(75,40,0));
+  strip.setPixelColor(5, strip.Color(75,40,0));
+  strip.show();
+  
+  setupFONA();
+  wdt_reset();
+
+  strip.setPixelColor(2, strip.Color(75,40,0));
+  strip.setPixelColor(4, strip.Color(75,40,0));
+  strip.show();
   // Try 4 times to post location on startup.
   for (uint8_t i = 0; i < 4; i++) {
     if (getLocation()) {
@@ -65,24 +105,45 @@ void setup() {
         break;
       }
     }
+    wdt_reset();
     delay(1000);
   }
+
+
+  setStripColor(74,40,0);
+  // Try 4 times to post assets on startup.
+  for(uint8_t i = 0; i < 4; i++){
+      if(postRFID()) break;
+      wdt_reset();
+  }
+
+  clearStrip();
 }
 
 void loop() {
   // Timing variables.
   unsigned long currentStatusMillis = 0;
-  static unsigned long previousStatusMillis = 0;
+  static unsigned long previousStatusMillis = millis();
   unsigned long currentLocMillis = 0;
-  static unsigned long previousLocMillis = 0;
-  static unsigned long tagStartMillis = 0;
+  static unsigned long previousLocMillis = millis();
+  static unsigned long tagStartMillis = millis();
+  unsigned long currentSMSMillis = 0;
+  static unsigned long previousSMSMillis = millis();
   static bool timeFlag = false;
+  static bool lightsOn = false;
 
   // Check for tags
+  wdt_reset();
   checkRFID();
 
   // !! Need code to handle onboard buttons.
-  // !! Need code to handle SMS activated lights
+
+  if(lightsOn){
+    setStripColor(100,100,100);
+  }
+  else{
+    clearStrip();
+  }
 
   // Let the terminal know we're still running every few seconds
   currentStatusMillis = millis();
@@ -105,18 +166,26 @@ void loop() {
   }
 
   // Update the location every few minutes
+  // Also check for lost bag texts
   currentLocMillis = millis();
   if (currentLocMillis - previousLocMillis >= updateLocTime) {
-    // Try 4 times to post location.
-    for (uint8_t i = 0; i < 4; i++) {
+    // Try 2 times to post location.
+    for (uint8_t i = 0; i < 2; i++) {
       if (getLocation()) {
         if (postLocation()) {
           break;
         }
       }
+      wdt_reset();
       delay(1000);
     }
     previousLocMillis = currentLocMillis;
+  }
+
+  currentSMSMillis = millis();
+  if(currentSMSMillis-previousSMSMillis>=SMSTime){
+    checkLostBag();
+    previousSMSMillis = currentSMSMillis;
   }
 }
 
@@ -167,6 +236,13 @@ void checkRFID(void) {
           Serial.print(F(" status: "));
           Serial.println(EEPROM.read(i));
           tagFlag = true;
+
+          if(UIDstatus[i] == 0){
+            blinkStrip(20,0,0);
+          }
+          else{
+            blinkStrip(0,20,0);
+          }
         }
       }
 
@@ -193,9 +269,15 @@ bool postRFID(void) {
   const String privateKey = F("mqrWmkvRVxTRGq1a8bjd"); //Private Key for data stream
   const byte NUM_FIELDS = 5; //number of fields in data stream
   const String fieldNames[NUM_FIELDS] = {"tag0", "tag1", "tag2", "tag3", "tag4"}; //actual data fields
+  bool success = true;
 
   uint16_t statuscode;
   int16_t length;
+
+  wdt_reset();
+  strip.setPixelColor(3,strip.Color(20,0,20));
+  strip.show();
+  
   String url = "http://data.sparkfun.com/input/";
   url += publicKey;
   url += F("?private_key=");
@@ -212,8 +294,11 @@ bool postRFID(void) {
 
   Serial.println(buf);
 
+  wdt_disable(); // next step takes a while
   if (!fona.HTTP_GET_start(buf, &statuscode, (uint16_t *)&length)) {
     Serial.println(F("Failed to post assets!"));
+    success = false;
+    wdt_enable(WDTO_8S); // stuff gets caught up here sometimes tho
   }
 
   while (length > 0) {
@@ -223,23 +308,25 @@ bool postRFID(void) {
       length--;
     }
   }
+  
   fona.HTTP_GET_end();
 
-  Serial.println(F("Attempted to post assets. Waiting 1sec."));
-  delay(1000);
-  return true;
-
-
-  Serial.println(F("No Fix."));
-  return false;
+  wdt_reset();
+  Serial.println(F("Attempted to post assets."));
+  successWipe();
+  return success;
 
 }
 
 // Location handling
 bool getLocation(void) {
+  strip.setPixelColor(3,strip.Color(0,20,20));
+  strip.show();
+  
   // Grab a GPS reading.
-  float latitude, longitude, speed_kph, heading, altitude;
+  wdt_reset();
   bool gpsSuccess = fona.getGPS(&fix, &latitude, &longitude, &speed_kph, &heading, &altitude);
+  wdt_reset();
 
   // Return true if a GPS lock is acquired
   if (gpsSuccess && fix == 1) {
@@ -247,6 +334,7 @@ bool getLocation(void) {
   }
   else {
     Serial.println(F("No Fix."));
+    failWipe();
     return false;
   }
 }
@@ -260,6 +348,11 @@ bool postLocation(void) {
   const String fieldNames[NUM_FIELDS] = {"lat", "long"}; //actual data fields
   float fieldData[NUM_FIELDS]; //holder for the data values
   bool success = true;
+
+  wdt_reset();
+
+  strip.setPixelColor(3, strip.Color(0,40,40));
+  strip.show();
 
   fieldData[0] = latitude;
   fieldData[1] = longitude;
@@ -290,9 +383,12 @@ bool postLocation(void) {
 
   Serial.println(buf);
 
+  wdt_disable();
   if (!fona.HTTP_GET_start(buf, &statuscode, (uint16_t *)&length)) {
-    Serial.println(F("Failed to post locatoin!"));
+    Serial.println(F("Failed to post location!"));
     success = false;
+    failWipe();
+    wdt_enable(WDTO_8S); // stuff gets caught up here sometimes
   }
 
   while (length > 0) {
@@ -305,23 +401,105 @@ bool postLocation(void) {
   
   fona.HTTP_GET_end();
 
-  Serial.println(F("Got fix and attempted to post. Waiting 1 sec."));
-  delay(1000);
+  wdt_reset();
+  successWipe();
+  Serial.println(F("Got fix and attempted to post."));
   return success;
 }
 
+void checkLostBag(void){
+  int8_t numSMS = fona.getNumSMS();
+  if(numSMS != 0){
+    for(uint8_t i = 0; i < 25; i++){
+      for(uint8_t j = 4; j > 0; j--){
+        uint8_t a, b, c;
+        a = i % 3;
+        b = (i+1) % 3;
+        c = (i+2) % 3;
+        
+        strip.setPixelColor(j-1, strip.Color(a*50,b*50,c*50));
+        strip.setPixelColor(7-j, strip.Color(a*50,b*50,c*50));
+        strip.show();
+        delay(100);
+        wdt_reset();
+      }
+    }
+
+    clearStrip();
+    
+    fona.deleteAllSMS();
+  }
+}
+
 // =================== MISC FUNCTIONS ===================
+// Clear the LED strip
+void clearStrip(void){
+  for(uint8_t i = 0; i < 7; i++){
+    strip.setPixelColor(i, strip.Color(0,0,0));
+    strip.show();
+  }
+}
+
+void blinkStrip(uint8_t r, uint8_t g, uint8_t b){
+  for(uint8_t i = 0; i < 6; i++){
+    for(uint8_t j = 0; j < 7; j++){
+      if(i%2==0){
+        strip.setPixelColor(j, strip.Color(r,g,b));
+        strip.show();
+      }
+      else {
+        strip.setPixelColor(j, strip.Color(0,0,0));
+        strip.show();
+      }
+    }
+    delay(100);
+  }
+}
+
+void setStripColor(uint8_t r, uint8_t g, uint8_t b){
+  for(uint8_t i = 0; i < 7; i++){
+    strip.setPixelColor(i, strip.Color(r,g,b));
+    strip.show();
+  }
+}
+
+void failWipe(void){
+  for(uint8_t i = 0; i < 3; i++){
+    strip.setPixelColor(2-i, strip.Color(20,0,0));
+    strip.setPixelColor(4+i, strip.Color(20,0,0));
+    strip.show();
+    delay(100);
+  }
+  for(uint8_t i = 0; i < 3; i++){
+    strip.setPixelColor(2-i, strip.Color(0,0,0));
+    strip.setPixelColor(4+i, strip.Color(0,0,0));
+    strip.show();
+    delay(100);
+  }
+}
+
+void successWipe(void){
+  for(uint8_t i = 0; i < 3; i++){
+    strip.setPixelColor(2-i, strip.Color(0,20,0));
+    strip.setPixelColor(4+i, strip.Color(0,20,0));
+    strip.show();
+    delay(100);
+  }
+  for(uint8_t i = 0; i < 3; i++){
+    strip.setPixelColor(2-i, strip.Color(0,0,0));
+    strip.setPixelColor(4+i, strip.Color(0,0,0));
+    strip.show();
+    delay(100);
+  }
+}
 
 // Halt function called when an error occurs.  Will print an error and stop execution while
 // doing a fast blink of the LED.  If the watchdog is enabled it will reset after 8 seconds.
 void halt(const __FlashStringHelper *error) {
+  wdt_enable(WDTO_1S);
+  strip.setPixelColor(0, strip.Color(50,0,0));
+  strip.show();
   Serial.println(error);
-  /*while (1) {
-    digitalWrite(ledPin, LOW);
-    delay(100);
-    digitalWrite(ledPin, HIGH);
-    delay(100);
-  }*/
 }
 
 void printFloat(float value, int places) {
@@ -391,13 +569,18 @@ void setupFONA(void) {
   pinMode(FONA_RI, INPUT);
   pinMode(FONA_PS, INPUT);
   pinMode(FONA_KEY, OUTPUT);
+  pinMode(FONA_VREF, OUTPUT);
+
+  digitalWrite(FONA_VREF, HIGH);
 
   if (FONA_PS == LOW) {
     digitalWrite(FONA_KEY, LOW);
     delay(2100);
+    wdt_reset();
     digitalWrite(FONA_KEY, HIGH);
   }
 
+  wdt_disable();
   // Initialize the FONA module
   Serial.println(F("Initializing FONA....(may take 10 seconds)"));
   fonaSS.begin(4800);
@@ -409,12 +592,15 @@ void setupFONA(void) {
   fonaSS.println("AT+CMEE=2");
   Serial.println(F("FONA is OK"));
 
+  wdt_enable(WDTO_8S);
   // Enable GPS.
-  while (!fona.enableGPS(true)) {delay(1000);}
+  while (!fona.enableGPS(true)) {delay(1000); wdt_reset();}
 
+  wdt_reset();
   // Enable GPRS
-  while (!fona.enableGPRS(true)) {delay(1000);}
+  while (!fona.enableGPRS(true)) {delay(1000); wdt_reset();}
 
+  wdt_reset();
   // Wait a little bit to stabilize the connection.
   delay(1000);
   Serial.println(F("FONA setup OK!"));
@@ -427,9 +613,7 @@ void setupRFID(void) {
   // Check for the PN532 chip
   uint32_t versiondata = nfc.getFirmwareVersion();
   if (! versiondata) {
-    Serial.print(F("Didn't find PN53x board"));
-    while (1); // halt
-    // NOTE maybe blink an LED at this point
+    halt(F("Couldn't find FONA")); // halt
   }
   // Got ok data, print it out!
   Serial.print(F("Found chip PN5")); Serial.println((versiondata >> 24) & 0xFF, HEX);
