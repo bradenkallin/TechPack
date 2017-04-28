@@ -62,6 +62,8 @@ const unsigned long tagTime = 5000;
 // Misc vars
 const unsigned long statusTime = 5000;
 const unsigned long SMSTime = 15000;
+bool lightsOn = false;
+bool emergencyFlag = false;
 
 void setup() {
   wdt_enable(WDTO_8S);
@@ -109,7 +111,6 @@ void setup() {
     delay(1000);
   }
 
-
   setStripColor(74,40,0);
   // Try 4 times to post assets on startup.
   for(uint8_t i = 0; i < 4; i++){
@@ -130,13 +131,13 @@ void loop() {
   unsigned long currentSMSMillis = 0;
   static unsigned long previousSMSMillis = millis();
   static bool timeFlag = false;
-  static bool lightsOn = false;
 
   // Check for tags
   wdt_reset();
   checkRFID();
 
   // !! Need code to handle onboard buttons.
+  checkButtons();
 
   if(lightsOn){
     setStripColor(100,100,100);
@@ -166,7 +167,7 @@ void loop() {
   }
 
   // Update the location every few minutes
-  // Also check for lost bag texts
+  // Also reset the emergency flag if set
   currentLocMillis = millis();
   if (currentLocMillis - previousLocMillis >= updateLocTime) {
     // Try 2 times to post location.
@@ -180,6 +181,7 @@ void loop() {
       delay(1000);
     }
     previousLocMillis = currentLocMillis;
+    emergencyFlag = false;
   }
 
   currentSMSMillis = millis();
@@ -268,7 +270,7 @@ bool postRFID(void) {
   const String publicKey = F("7vz3gGRdAnFlGJYdbpZ8"); //Public Key for data stream
   const String privateKey = F("mqrWmkvRVxTRGq1a8bjd"); //Private Key for data stream
   const byte NUM_FIELDS = 5; //number of fields in data stream
-  const String fieldNames[NUM_FIELDS] = {"tag0", "tag1", "tag2", "tag3", "tag4"}; //actual data fields
+  const String fieldNames[NUM_FIELDS] = {F("tag0"), F("tag1"), F("tag2"), F("tag3"), F("tag4")}; //actual data fields
   bool success = true;
 
   uint16_t statuscode;
@@ -312,10 +314,13 @@ bool postRFID(void) {
   fona.HTTP_GET_end();
 
   wdt_reset();
-  Serial.println(F("Attempted to post assets."));
-  successWipe();
+  if(success){
+    successWipe();
+    Serial.println(F("Attempted to post assets."));
+  }
+  else failWipe();
+  
   return success;
-
 }
 
 // Location handling
@@ -411,17 +416,19 @@ void checkLostBag(void){
   int8_t numSMS = fona.getNumSMS();
   if(numSMS != 0){
     for(uint8_t i = 0; i < 25; i++){
-      for(uint8_t j = 4; j > 0; j--){
-        uint8_t a, b, c;
-        a = i % 3;
-        b = (i+1) % 3;
-        c = (i+2) % 3;
-        
-        strip.setPixelColor(j-1, strip.Color(a*50,b*50,c*50));
-        strip.setPixelColor(7-j, strip.Color(a*50,b*50,c*50));
-        strip.show();
-        delay(100);
-        wdt_reset();
+      if(!emergencyFlag){
+        for(uint8_t j = 4; j > 0; j--){
+          uint8_t a, b, c;
+          a = i % 3;
+          b = (i+1) % 3;
+          c = (i+2) % 3;
+          
+          strip.setPixelColor(j-1, strip.Color(a*50,b*50,c*50));
+          strip.setPixelColor(7-j, strip.Color(a*50,b*50,c*50));
+          strip.show();
+          delay(100);
+          wdt_reset();
+        }
       }
     }
 
@@ -480,8 +487,8 @@ void failWipe(void){
 
 void successWipe(void){
   for(uint8_t i = 0; i < 3; i++){
-    strip.setPixelColor(2-i, strip.Color(0,20,0));
-    strip.setPixelColor(4+i, strip.Color(0,20,0));
+    strip.setPixelColor(2-i, strip.Color(0,0,20));
+    strip.setPixelColor(4+i, strip.Color(0,0,20));
     strip.show();
     delay(100);
   }
@@ -564,6 +571,62 @@ void printFloat(float value, int places) {
   }
 }
 
+void emergencySMS(void){
+  //String message = F("EMERGENCY CONTACT FROM JAMES TECHPACK");
+  //String address = F("5397771317");
+  emergencyFlag=true;
+  fona.sendSMS("5397771317","TECHPACK CONTACT");
+}
+
+void checkButtons(void){ 
+  uint8_t button1State = digitalRead(BUTTON1);
+  static uint8_t lastButton1State = HIGH;
+  uint8_t button2State = digitalRead(BUTTON4);
+  static uint8_t lastButton2State = HIGH;
+  uint8_t button3State = digitalRead(BUTTON3);
+  static uint8_t lastButton3State = HIGH;
+  static unsigned long emergencyStartTime = 0;
+  const unsigned long emergencyTime = 5000;
+
+  // compare the buttonState to its previous state
+  if (button1State != lastButton1State) {
+    if (button1State == HIGH) {
+      lightsOn = !lightsOn;
+    }
+    // Delay a little bit to avoid bouncing
+    delay(50);
+  }
+  lastButton1State = button1State;
+
+  if(button2State == LOW && lastButton2State == HIGH){
+    emergencyStartTime = millis();
+    Serial.println(F("em button"));
+  } 
+  else if(button2State == LOW && lastButton2State == LOW){
+    if(millis() - emergencyStartTime >= emergencyTime){
+      setStripColor(255,0,0);
+      emergencySMS();
+      for(uint8_t i = 0; i < 10; i++){
+        failWipe();
+        successWipe();
+        wdt_reset();
+      }
+    }
+  }
+  lastButton2State = button2State;
+
+  if(button3State == LOW && lastButton3State == HIGH){
+    emergencyStartTime = millis();
+    Serial.println(F("sm button"));
+  } 
+  else if(button3State == LOW && lastButton3State == LOW){
+    if(millis() - emergencyStartTime >= emergencyTime){
+      emergencySMS();
+    }
+  }
+  lastButton3State = button3State;
+}
+
 // =================== SETUP FUNCTIONS ===================
 void setupFONA(void) {
   pinMode(FONA_RI, INPUT);
@@ -589,7 +652,7 @@ void setupFONA(void) {
     halt(F("Couldn't find FONA"));
   }
 
-  fonaSS.println("AT+CMEE=2");
+  fonaSS.println(F("AT+CMEE=2"));
   Serial.println(F("FONA is OK"));
 
   wdt_enable(WDTO_8S);
@@ -634,3 +697,4 @@ void setupRFID(void) {
 
   Serial.println(F("RFID setup OK!"));
 }
+
