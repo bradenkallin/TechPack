@@ -7,18 +7,19 @@
 // Inspired by the code from Marco Schwartz and Tony DiCola
 
 // Libraries
-#include <SoftwareSerial.h>
 #include "Adafruit_FONA.h"
-#include <Wire.h>
-#include <SPI.h>
-#include <Adafruit_PN532.h>
-#include <EEPROM.h>
 #include <Adafruit_NeoPixel.h>
+#include <Adafruit_PN532.h>
 #include <avr/wdt.h>
 #include <avr/power.h>
+#include <EEPROM.h>
+#include <SoftwareSerial.h>
+#include <SPI.h>
+#include <Wire.h>
 
+// Lights and buttons
 #define PIXEL_PIN 6
-#define BUTTON1 A0
+#define BUTTON1 A0 // Push buttons
 #define BUTTON2 A1
 #define BUTTON3 A2
 #define BUTTON4 A3
@@ -26,10 +27,9 @@
 // Define I2C Pins for PN532
 #define PN532_IRQ   (2)
 #define PN532_RESET (3)  // Not connected by default on the NFC Shield
-Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
 
-// FONA pins configuration
-#define FONA_VREF   7
+// FONA pins
+#define FONA_VREF   7   // A pin tied high for IO reference
 #define FONA_RST    8   // FONA serial RX pin (pin 2 for shield).
 #define FONA_RX     9   // FONA serial TX pin (pin 3 for shield).
 #define FONA_TX     10  // FONA reset pin (pin 4 for shield)
@@ -40,66 +40,65 @@ Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
 // NeoPixel instance
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(7, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
 
+// PN532 instance
+Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
+
 // FONA instance & configuration
 SoftwareSerial fonaSS = SoftwareSerial(FONA_TX, FONA_RX);     // FONA software serial connection.
 Adafruit_FONA fona = Adafruit_FONA(FONA_RST);                 // FONA library connection.
 
 // GPS variables
-const unsigned long updateLocTime = 30000;
-float latitude, longitude, speed_kph, heading, altitude = 0;
-bool gpsSuccess = false;
-int fix = 0;
+float latitude, longitude, 
+      speed_kph, heading, altitude = 0;
+bool  gpsSuccess = false;
+int   fix = 0;
 
 // RFID variables
 const uint8_t numTags = 5;
 const uint8_t UIDs[numTags][7] = {{0x5B, 0x1B, 0x4C, 0x21, 0, 0, 0}, {0x8B, 0x31, 0x4C, 0x21, 0, 0, 0},
-  {0xFB, 0x27, 0x4C, 0x21, 0, 0, 0}, {0xEB, 0x17, 0x48, 0x21, 0, 0, 0},
-  {0xAB, 0x19, 0x4C, 0x21, 0, 0, 0}};
-uint8_t UIDstatus[5] = {0, 0, 0, 0, 0};
+                                  {0xFB, 0x27, 0x4C, 0x21, 0, 0, 0}, {0xEB, 0x17, 0x48, 0x21, 0, 0, 0},
+                                  {0xAB, 0x19, 0x4C, 0x21, 0, 0, 0}};
+uint8_t UIDstatus[numTags] = {0, 0, 0, 0, 0};
 bool tagFlag = false;
-const unsigned long tagTime = 5000;
+
+// Timing vars (in ms)
+const unsigned long statusTime    = 5000;
+const unsigned long SMSTime       = 5000;
+const unsigned long updateLocTime = 60000;
+const unsigned long tagTime       = 10000;
 
 // Misc vars
-const unsigned long statusTime = 5000;
-const unsigned long SMSTime = 15000;
 bool lightsOn = false;
 bool emergencyFlag = false;
 
 void setup() {
+  // WDT because there's no reset button
   wdt_enable(WDTO_8S);
-
-  // button i/o setup
-  pinMode(BUTTON1, INPUT);
-  pinMode(BUTTON2, INPUT);
-  pinMode(BUTTON3, INPUT);
-  pinMode(BUTTON4, INPUT);
-  digitalWrite(BUTTON1, INPUT_PULLUP);
-  digitalWrite(BUTTON2, INPUT_PULLUP);
-  digitalWrite(BUTTON3, INPUT_PULLUP);
-  digitalWrite(BUTTON4, INPUT_PULLUP);
+  wdt_reset();
 
   // Initialize serial output.
   Serial.begin(115200);
-  Serial.println(F("Geotracking with Adafruit IO & FONA808"));
+  Serial.println(F("Geotracking with FONA808"));
 
+  // Setup buttons and pins.
+  setupIO();
+
+  // Start light strip.
   strip.begin();
-  strip.setPixelColor(0, strip.Color(75,40,0));
-  strip.setPixelColor(6, strip.Color(75,40,0));
-  strip.show();
+
+  // Lights to keep track of startup state.
+  statusLights(1);
   
   setupRFID();
   wdt_reset();
-
-  strip.setPixelColor(1, strip.Color(75,40,0));
-  strip.setPixelColor(5, strip.Color(75,40,0));
-  strip.show();
   
+  statusLights(2);
+
   setupFONA();
   wdt_reset();
 
-  strip.setPixelColor(2, strip.Color(75,40,0));
-  strip.setPixelColor(4, strip.Color(75,40,0));
-  strip.show();
+  statusLights(3);
+
   // Try 4 times to post location on startup.
   for (uint8_t i = 0; i < 4; i++) {
     if (getLocation()) {
@@ -108,10 +107,10 @@ void setup() {
       }
     }
     wdt_reset();
-    delay(1000);
   }
 
-  setStripColor(74,40,0);
+  statusLights(3);
+
   // Try 4 times to post assets on startup.
   for(uint8_t i = 0; i < 4; i++){
       if(postRFID()) break;
@@ -123,20 +122,19 @@ void setup() {
 
 void loop() {
   // Timing variables.
-  unsigned long currentStatusMillis = 0;
+  unsigned long        currentStatusMillis  = 0;
   static unsigned long previousStatusMillis = millis();
-  unsigned long currentLocMillis = 0;
-  static unsigned long previousLocMillis = millis();
-  static unsigned long tagStartMillis = millis();
-  unsigned long currentSMSMillis = 0;
-  static unsigned long previousSMSMillis = millis();
-  static bool timeFlag = false;
+  unsigned long        currentLocMillis     = 0;
+  static unsigned long previousLocMillis    = millis();
+  static unsigned long tagStartMillis       = millis();
+  unsigned long        currentSMSMillis     = 0;
+  static unsigned long previousSMSMillis    = millis();
+  static bool          tagTimerFlag = false;
 
-  // Check for tags
   wdt_reset();
+
   checkRFID();
 
-  // !! Need code to handle onboard buttons.
   checkButtons();
 
   if(lightsOn){
@@ -157,13 +155,13 @@ void loop() {
   if(tagFlag){
     tagStartMillis = millis();
     tagFlag = false;
-    timeFlag = true;
+    tagTimerFlag = true;
   }
-  if(timeFlag && (millis()-tagStartMillis>=tagTime)){
-    for(uint8_t i = 0; i < 4; i++){
+  if(tagTimerFlag && (millis() - tagStartMillis >= tagTime)){
+    for(uint8_t i = 0; i < 2; i++){ // try to update twice
       if(postRFID()) break;
     }
-    timeFlag = false;
+    tagTimerFlag = false;
   }
 
   // Update the location every few minutes
@@ -184,6 +182,7 @@ void loop() {
     emergencyFlag = false;
   }
 
+  // Check for lost bag mode every few seconds
   currentSMSMillis = millis();
   if(currentSMSMillis-previousSMSMillis>=SMSTime){
     checkLostBag();
@@ -443,8 +442,8 @@ void checkLostBag(void){
 void clearStrip(void){
   for(uint8_t i = 0; i < 7; i++){
     strip.setPixelColor(i, strip.Color(0,0,0));
-    strip.show();
   }
+  strip.show();
 }
 
 void blinkStrip(uint8_t r, uint8_t g, uint8_t b){
@@ -696,5 +695,40 @@ void setupRFID(void) {
   }
 
   Serial.println(F("RFID setup OK!"));
+}
+
+void setupIO(void){
+  // button i/o setup
+  pinMode(BUTTON1, INPUT);
+  pinMode(BUTTON2, INPUT);
+  pinMode(BUTTON3, INPUT);
+  pinMode(BUTTON4, INPUT);
+  digitalWrite(BUTTON1, INPUT_PULLUP);
+  digitalWrite(BUTTON2, INPUT_PULLUP);
+  digitalWrite(BUTTON3, INPUT_PULLUP);
+  digitalWrite(BUTTON4, INPUT_PULLUP);
+}
+
+void statusLights(uint8_t status){
+  switch(status){
+    case 1:
+      strip.setPixelColor(0, strip.Color(75,40,0));
+      strip.setPixelColor(6, strip.Color(75,40,0));
+      strip.show();
+      break;
+    case 2:
+      strip.setPixelColor(1, strip.Color(75,40,0));
+      strip.setPixelColor(5, strip.Color(75,40,0));
+      strip.show();
+      break;
+    case 3:
+      strip.setPixelColor(2, strip.Color(75,40,0));
+      strip.setPixelColor(4, strip.Color(75,40,0));
+      strip.show();
+      break;
+    default:
+      clearStrip();
+      break;
+  }
 }
 
