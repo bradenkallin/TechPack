@@ -44,8 +44,8 @@ Adafruit_NeoPixel strip = Adafruit_NeoPixel(7, PIXEL_PIN, NEO_GRB + NEO_KHZ800);
 Adafruit_PN532 nfc(PN532_IRQ, PN532_RESET);
 
 // FONA instance & configuration
-SoftwareSerial fonaSS = SoftwareSerial(FONA_TX, FONA_RX);     // FONA software serial connection.
-Adafruit_FONA fona = Adafruit_FONA(FONA_RST);                 // FONA library connection.
+SoftwareSerial fonaSS = SoftwareSerial(FONA_TX, FONA_RX); 
+Adafruit_FONA fona = Adafruit_FONA(FONA_RST);
 
 // GPS variables
 float latitude, longitude, 
@@ -55,8 +55,10 @@ int   fix = 0;
 
 // RFID variables
 const uint8_t numTags = 5;
-const uint8_t UIDs[numTags][7] = {{0x5B, 0x1B, 0x4C, 0x21, 0, 0, 0}, {0x8B, 0x31, 0x4C, 0x21, 0, 0, 0},
-                                  {0xFB, 0x27, 0x4C, 0x21, 0, 0, 0}, {0xEB, 0x17, 0x48, 0x21, 0, 0, 0},
+const uint8_t UIDs[numTags][7] = {{0x5B, 0x1B, 0x4C, 0x21, 0, 0, 0}, 
+                                  {0x8B, 0x31, 0x4C, 0x21, 0, 0, 0},
+                                  {0xFB, 0x27, 0x4C, 0x21, 0, 0, 0}, 
+                                  {0xEB, 0x17, 0x48, 0x21, 0, 0, 0},
                                   {0xAB, 0x19, 0x4C, 0x21, 0, 0, 0}};
 uint8_t UIDstatus[numTags] = {0, 0, 0, 0, 0};
 bool tagFlag = false;
@@ -184,27 +186,32 @@ void loop() {
 
   // Check for lost bag mode every few seconds
   currentSMSMillis = millis();
-  if(currentSMSMillis-previousSMSMillis>=SMSTime){
+  if(currentSMSMillis - previousSMSMillis >= SMSTime){
     checkLostBag();
     previousSMSMillis = currentSMSMillis;
   }
 }
 
-// Mifare Card handling
+// ============================================================================
+// ============================== RFID FUNCTIONS ==============================
+// ============================================================================
+
+// Read RFID cards. If they match a registered tag, update check-in/out status
 void checkRFID(void) {
   uint8_t success;
   uint8_t uid[] = { 0, 0, 0, 0, 0, 0, 0 };  // Buffer to store the returned UID
-  uint8_t uidLength;                        // Length of the UID (4 or 7 bytes depending on ISO14443A card type)
+  uint8_t uidLength;                        // Length of the UID 
   uint8_t timeoutTime = 10;                 // Timeout after 10ms
 
   // Wait for an ISO14443A type cards (Mifare, etc.).  When one is found
   // 'uid' will be populated with the UID, and uidLength will indicate
   // if the uid is 4 bytes (Mifare Classic) or 7 bytes (Mifare Ultralight)
-  success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, &uidLength, timeoutTime);
+  success = nfc.readPassiveTargetID(PN532_MIFARE_ISO14443A, uid, 
+                                    &uidLength, timeoutTime);
 
   if (success) {
     // Display some basic information about the card
-    Serial.println(F("Found an ISO14443A card"));
+    Serial.println(F("Found a card"));
     Serial.print(F("  UID Length: "));
     Serial.print(uidLength, DEC);
     Serial.println(F(" bytes"));
@@ -214,9 +221,6 @@ void checkRFID(void) {
 
     if (uidLength == 4)
     {
-      // We probably have a Mifare Classic card ...
-      Serial.println(F("Seems to be a Mifare Classic card (4 byte UID)"));
-
       // Toggle the tag in or out if it's one of the registered tags
       uint8_t i = 0;
       uint8_t j = 0;
@@ -229,9 +233,9 @@ void checkRFID(void) {
           }
         }
         if (match) {
-          UIDstatus[i] = UIDstatus[i] ^ 0xFF;
-          EEPROM.update(i, UIDstatus[i]);
-          Serial.println(F(""));
+          UIDstatus[i] = UIDstatus[i] ^ 0xFF; 
+          EEPROM.update(i, UIDstatus[i]); // store tag status in EEPROM
+          Serial.println(F("")); //indicate check-in/out to the terminal
           Serial.print(F("Tag "));
           Serial.print(i);
           Serial.print(F(" status: "));
@@ -239,7 +243,7 @@ void checkRFID(void) {
           tagFlag = true;
 
           if(UIDstatus[i] == 0){
-            blinkStrip(20,0,0);
+            blinkStrip(20,0,0); //indicate check-in/out to the user
           }
           else{
             blinkStrip(0,20,0);
@@ -251,34 +255,28 @@ void checkRFID(void) {
       delay(1000);
 
     }
-
-    if (uidLength == 7)
-    {
-      // We probably have a Mifare Ultralight card ...
-      Serial.println(F("Seems to be a Mifare Ultralight tag (7 byte UID)"));
-
-      // wait a little bit before reading again.
-      delay(1000);
-    }
   }
 }
 
-// Asset reporting
+// Post tag statuses to data stream
 bool postRFID(void) {
   //Sparkfun URL Building
-  const String publicKey = F("7vz3gGRdAnFlGJYdbpZ8"); //Public Key for data stream
-  const String privateKey = F("mqrWmkvRVxTRGq1a8bjd"); //Private Key for data stream
+  const String publicKey = F("7vz3gGRdAnFlGJYdbpZ8"); //Public Key for stream
+  const String privateKey = F("mqrWmkvRVxTRGq1a8bjd"); //Private Key for stream
   const byte NUM_FIELDS = 5; //number of fields in data stream
-  const String fieldNames[NUM_FIELDS] = {F("tag0"), F("tag1"), F("tag2"), F("tag3"), F("tag4")}; //actual data fields
+  const String fieldNames[NUM_FIELDS] = {F("tag0"), F("tag1"), F("tag2"), 
+                                         F("tag3"), F("tag4")}; // data fields
   bool success = true;
-
   uint16_t statuscode;
   int16_t length;
 
   wdt_reset();
+
+  // let the user know the fona is trying to update the data stream
   strip.setPixelColor(3,strip.Color(20,0,20));
   strip.show();
-  
+
+  // url building
   String url = "http://data.sparkfun.com/input/";
   url += publicKey;
   url += F("?private_key=");
@@ -296,12 +294,13 @@ bool postRFID(void) {
   Serial.println(buf);
 
   wdt_disable(); // next step takes a while
+
+  // Attempt to post the update
   if (!fona.HTTP_GET_start(buf, &statuscode, (uint16_t *)&length)) {
-    Serial.println(F("Failed to post assets!"));
+    Serial.println(F("Failed to post tags!"));
     success = false;
     wdt_enable(WDTO_8S); // stuff gets caught up here sometimes tho
   }
-
   while (length > 0) {
     while (fona.available()) {
       char c = fona.read();
@@ -309,18 +308,22 @@ bool postRFID(void) {
       length--;
     }
   }
-  
   fona.HTTP_GET_end();
 
   wdt_reset();
+
   if(success){
-    successWipe();
-    Serial.println(F("Attempted to post assets."));
+    colorWipe(0,30,0);
+    Serial.println(F("Posted tags!"));
   }
-  else failWipe();
+  else colorWipe(30,0,0);
   
   return success;
 }
+
+// ============================================================================
+// =============================== GPS FUNCTIONS ==============================
+// ============================================================================
 
 // Location handling
 bool getLocation(void) {
@@ -329,7 +332,8 @@ bool getLocation(void) {
   
   // Grab a GPS reading.
   wdt_reset();
-  bool gpsSuccess = fona.getGPS(&fix, &latitude, &longitude, &speed_kph, &heading, &altitude);
+  bool gpsSuccess = fona.getGPS(&fix, &latitude, &longitude, 
+                                &speed_kph, &heading, &altitude);
   wdt_reset();
 
   // Return true if a GPS lock is acquired
@@ -338,7 +342,7 @@ bool getLocation(void) {
   }
   else {
     Serial.println(F("No Fix."));
-    failWipe();
+    colorWipe(30,0,0);
     return false;
   }
 }
@@ -346,10 +350,10 @@ bool getLocation(void) {
 // Location reporting
 bool postLocation(void) {
   //Sparkfun URL Building
-  const String publicKey = F("5JDdvbVgx6urREAVgKOM"); //Public Key for data stream
-  const String privateKey = F("7BEe4kl6xRC7jo2neKrx"); //Private Key for data stream
+  const String publicKey = F("5JDdvbVgx6urREAVgKOM"); //Public Key for stream
+  const String privateKey = F("7BEe4kl6xRC7jo2neKrx"); //Private Key for stream
   const byte NUM_FIELDS = 2; //number of fields in data stream
-  const String fieldNames[NUM_FIELDS] = {"lat", "long"}; //actual data fields
+  const String fieldNames[NUM_FIELDS] = {"lat", "long"}; // data fields
   float fieldData[NUM_FIELDS]; //holder for the data values
   bool success = true;
 
@@ -361,11 +365,11 @@ bool postLocation(void) {
   fieldData[0] = latitude;
   fieldData[1] = longitude;
 
-  Serial.print(F("Latitude: "));
+  Serial.print(F("Lat: "));
   printFloat(latitude, 5);
   Serial.println(F(""));
 
-  Serial.print(F("Longitude: "));
+  Serial.print(F("Long: "));
   printFloat(longitude, 5);
   Serial.println(F(""));
 
@@ -388,13 +392,13 @@ bool postLocation(void) {
   Serial.println(buf);
 
   wdt_disable();
+
   if (!fona.HTTP_GET_start(buf, &statuscode, (uint16_t *)&length)) {
     Serial.println(F("Failed to post location!"));
     success = false;
-    failWipe();
+    colorWipe(30,0,0);
     wdt_enable(WDTO_8S); // stuff gets caught up here sometimes
   }
-
   while (length > 0) {
     while (fona.available()) {
       char c = fona.read();
@@ -406,8 +410,9 @@ bool postLocation(void) {
   fona.HTTP_GET_end();
 
   wdt_reset();
-  successWipe();
-  Serial.println(F("Got fix and attempted to post."));
+
+  colorWipe(0,30,0);
+  Serial.println(F("Posted location."));
   return success;
 }
 
@@ -437,7 +442,10 @@ void checkLostBag(void){
   }
 }
 
-// =================== MISC FUNCTIONS ===================
+// ============================================================================
+// ============================== LIGHT FUNCTIONS =============================
+// ============================================================================
+
 // Clear the LED strip
 void clearStrip(void){
   for(uint8_t i = 0; i < 7; i++){
@@ -446,6 +454,7 @@ void clearStrip(void){
   strip.show();
 }
 
+// Blink the LED strip
 void blinkStrip(uint8_t r, uint8_t g, uint8_t b){
   for(uint8_t i = 0; i < 6; i++){
     for(uint8_t j = 0; j < 7; j++){
@@ -462,6 +471,7 @@ void blinkStrip(uint8_t r, uint8_t g, uint8_t b){
   }
 }
 
+// Solid strip color
 void setStripColor(uint8_t r, uint8_t g, uint8_t b){
   for(uint8_t i = 0; i < 7; i++){
     strip.setPixelColor(i, strip.Color(r,g,b));
@@ -469,10 +479,11 @@ void setStripColor(uint8_t r, uint8_t g, uint8_t b){
   }
 }
 
-void failWipe(void){
+// Single LEDs emanating from the center.
+void colorWipe(uint8_t r, uint8_t g, uint8_t b){
   for(uint8_t i = 0; i < 3; i++){
-    strip.setPixelColor(2-i, strip.Color(20,0,0));
-    strip.setPixelColor(4+i, strip.Color(20,0,0));
+    strip.setPixelColor(2-i, strip.Color(r,g,b));
+    strip.setPixelColor(4+i, strip.Color(r,g,b));
     strip.show();
     delay(100);
   }
@@ -484,23 +495,8 @@ void failWipe(void){
   }
 }
 
-void successWipe(void){
-  for(uint8_t i = 0; i < 3; i++){
-    strip.setPixelColor(2-i, strip.Color(0,0,20));
-    strip.setPixelColor(4+i, strip.Color(0,0,20));
-    strip.show();
-    delay(100);
-  }
-  for(uint8_t i = 0; i < 3; i++){
-    strip.setPixelColor(2-i, strip.Color(0,0,0));
-    strip.setPixelColor(4+i, strip.Color(0,0,0));
-    strip.show();
-    delay(100);
-  }
-}
-
-// Halt function called when an error occurs.  Will print an error and stop execution while
-// doing a fast blink of the LED.  If the watchdog is enabled it will reset after 8 seconds.
+// Halt function called when an error occurs.  
+// Will print an error and stop execution
 void halt(const __FlashStringHelper *error) {
   wdt_enable(WDTO_1S);
   strip.setPixelColor(0, strip.Color(50,0,0));
@@ -508,125 +504,9 @@ void halt(const __FlashStringHelper *error) {
   Serial.println(error);
 }
 
-void printFloat(float value, int places) {
-  // this is used to cast digits
-  int digit;
-  float tens = 0.1;
-  int tenscount = 0;
-  int i;
-  float tempfloat = value;
-
-  // make sure we round properly. this could use pow from <math.h>, but doesn't seem worth the import
-  // if this rounding step isn't here, the value  54.321 prints as 54.3209
-
-  // calculate rounding term d:   0.5/pow(10,places)
-  float d = 0.5;
-  if (value < 0)
-    d *= -1.0;
-  // divide by ten for each decimal place
-  for (i = 0; i < places; i++)
-    d /= 10.0;
-  // this small addition, combined with truncation will round our values properly
-  tempfloat +=  d;
-
-  // first get value tens to be the large power of ten less than value
-  // tenscount isn't necessary but it would be useful if you wanted to know after this how many chars the number will take
-
-  if (value < 0)
-    tempfloat *= -1.0;
-  while ((tens * 10.0) <= tempfloat) {
-    tens *= 10.0;
-    tenscount += 1;
-  }
-
-  // write out the negative if needed
-  if (value < 0)
-    Serial.print(F("-"));
-
-  if (tenscount == 0)
-    Serial.print(0, DEC);
-
-  for (i = 0; i < tenscount; i++) {
-    digit = (int) (tempfloat / tens);
-    Serial.print(digit, DEC);
-    tempfloat = tempfloat - ((float)digit * tens);
-    tens /= 10.0;
-  }
-
-  // if no places after decimal, stop now and return
-  if (places <= 0)
-    return;
-
-  // otherwise, write the point and continue on
-  Serial.print('.');
-
-  // now write out each decimal place by shifting digits one by one into the ones place and writing the truncated value
-  for (i = 0; i < places; i++) {
-    tempfloat *= 10.0;
-    digit = (int) tempfloat;
-    Serial.print(digit, DEC);
-    // once written, subtract off that digit
-    tempfloat = tempfloat - (float) digit;
-  }
-}
-
-void emergencySMS(void){
-  //String message = F("EMERGENCY CONTACT FROM JAMES TECHPACK");
-  //String address = F("5397771317");
-  emergencyFlag=true;
-  fona.sendSMS("5397771317","TECHPACK CONTACT");
-}
-
-void checkButtons(void){ 
-  uint8_t button1State = digitalRead(BUTTON1);
-  static uint8_t lastButton1State = HIGH;
-  uint8_t button2State = digitalRead(BUTTON4);
-  static uint8_t lastButton2State = HIGH;
-  uint8_t button3State = digitalRead(BUTTON3);
-  static uint8_t lastButton3State = HIGH;
-  static unsigned long emergencyStartTime = 0;
-  const unsigned long emergencyTime = 5000;
-
-  // compare the buttonState to its previous state
-  if (button1State != lastButton1State) {
-    if (button1State == HIGH) {
-      lightsOn = !lightsOn;
-    }
-    // Delay a little bit to avoid bouncing
-    delay(50);
-  }
-  lastButton1State = button1State;
-
-  if(button2State == LOW && lastButton2State == HIGH){
-    emergencyStartTime = millis();
-    Serial.println(F("em button"));
-  } 
-  else if(button2State == LOW && lastButton2State == LOW){
-    if(millis() - emergencyStartTime >= emergencyTime){
-      setStripColor(255,0,0);
-      emergencySMS();
-      for(uint8_t i = 0; i < 10; i++){
-        failWipe();
-        successWipe();
-        wdt_reset();
-      }
-    }
-  }
-  lastButton2State = button2State;
-
-  if(button3State == LOW && lastButton3State == HIGH){
-    emergencyStartTime = millis();
-    Serial.println(F("sm button"));
-  } 
-  else if(button3State == LOW && lastButton3State == LOW){
-    if(millis() - emergencyStartTime >= emergencyTime){
-      emergencySMS();
-    }
-  }
-  lastButton3State = button3State;
-}
-
-// =================== SETUP FUNCTIONS ===================
+// ============================================================================
+// ============================== SETUP FUNCTIONS =============================
+// ============================================================================
 void setupFONA(void) {
   pinMode(FONA_RI, INPUT);
   pinMode(FONA_PS, INPUT);
@@ -679,8 +559,6 @@ void setupRFID(void) {
   }
   // Got ok data, print it out!
   Serial.print(F("Found chip PN5")); Serial.println((versiondata >> 24) & 0xFF, HEX);
-  Serial.print(F("Firmware ver. ")); Serial.print((versiondata >> 16) & 0xFF, DEC);
-  Serial.print('.'); Serial.println((versiondata >> 8) & 0xFF, DEC);
 
   // configure board to read RFID tags
   nfc.SAMConfig();
@@ -717,11 +595,17 @@ void statusLights(uint8_t status){
       strip.show();
       break;
     case 2:
+      strip.setPixelColor(0, strip.Color(75,40,0));
+      strip.setPixelColor(6, strip.Color(75,40,0));
       strip.setPixelColor(1, strip.Color(75,40,0));
       strip.setPixelColor(5, strip.Color(75,40,0));
       strip.show();
       break;
     case 3:
+      strip.setPixelColor(0, strip.Color(75,40,0));
+      strip.setPixelColor(6, strip.Color(75,40,0));
+      strip.setPixelColor(1, strip.Color(75,40,0));
+      strip.setPixelColor(5, strip.Color(75,40,0));    
       strip.setPixelColor(2, strip.Color(75,40,0));
       strip.setPixelColor(4, strip.Color(75,40,0));
       strip.show();
@@ -732,3 +616,127 @@ void statusLights(uint8_t status){
   }
 }
 
+// ============================================================================
+// =============================== MISC FUNCTIONS =============================
+// ============================================================================
+
+void printFloat(float value, int places) {
+  // this is used to cast digits
+  int digit;
+  float tens = 0.1;
+  int tenscount = 0;
+  int i;
+  float tempfloat = value;
+
+  // make sure we round properly. this could use pow from <math.h>, 
+  // but doesn't seem worth the import
+  // if this rounding step isn't here, the value  54.321 prints as 54.3209
+
+  // calculate rounding term d:   0.5/pow(10,places)
+  float d = 0.5;
+  if (value < 0)
+    d *= -1.0;
+  // divide by ten for each decimal place
+  for (i = 0; i < places; i++)
+    d /= 10.0;
+  // this small addition, combined with truncation will round our values properly
+  tempfloat +=  d;
+
+  // first get value tens to be the large power of ten less than value
+  // tenscount isn't necessary but it would be useful if you 
+  // wanted to know after this how many chars the number will take
+
+  if (value < 0)
+    tempfloat *= -1.0;
+  while ((tens * 10.0) <= tempfloat) {
+    tens *= 10.0;
+    tenscount += 1;
+  }
+
+  // write out the negative if needed
+  if (value < 0)
+    Serial.print(F("-"));
+
+  if (tenscount == 0)
+    Serial.print(0, DEC);
+
+  for (i = 0; i < tenscount; i++) {
+    digit = (int) (tempfloat / tens);
+    Serial.print(digit, DEC);
+    tempfloat = tempfloat - ((float)digit * tens);
+    tens /= 10.0;
+  }
+
+  // if no places after decimal, stop now and return
+  if (places <= 0)
+    return;
+
+  // otherwise, write the point and continue on
+  Serial.print('.');
+
+  // now write out each decimal place by shifting digits 
+  // one by one into the ones place and writing the truncated value
+  for (i = 0; i < places; i++) {
+    tempfloat *= 10.0;
+    digit = (int) tempfloat;
+    Serial.print(digit, DEC);
+    // once written, subtract off that digit
+    tempfloat = tempfloat - (float) digit;
+  }
+}
+
+void emergencySMS(void){
+  //String message = F("EMERGENCY CONTACT FROM JAMES TECHPACK");
+  //String address = F("5397771317");
+  emergencyFlag=true;
+  fona.sendSMS("5397771317","TECHPACK CONTACT");
+}
+
+void checkButtons(void){ 
+  uint8_t button1State = digitalRead(BUTTON1);
+  static uint8_t lastButton1State = HIGH;
+  uint8_t button2State = digitalRead(BUTTON4);
+  static uint8_t lastButton2State = HIGH;
+  uint8_t button3State = digitalRead(BUTTON3);
+  static uint8_t lastButton3State = HIGH;
+  static unsigned long emergencyStartTime = 0;
+  const unsigned long emergencyTime = 5000;
+
+  // compare the buttonState to its previous state
+  if (button1State != lastButton1State) {
+    if (button1State == HIGH) {
+      lightsOn = !lightsOn;
+    }
+    // Delay a little bit to avoid bouncing
+    delay(50);
+  }
+  lastButton1State = button1State;
+
+  if(button2State == LOW && lastButton2State == HIGH){
+    emergencyStartTime = millis();
+    Serial.println(F("em button"));
+  } 
+  else if(button2State == LOW && lastButton2State == LOW){
+    if(millis() - emergencyStartTime >= emergencyTime){
+      setStripColor(255,0,0);
+      emergencySMS();
+      for(uint8_t i = 0; i < 10; i++){
+        colorWipe(30,0,0);
+        colorWipe(0,0,30);
+        wdt_reset();
+      }
+    }
+  }
+  lastButton2State = button2State;
+
+  if(button3State == LOW && lastButton3State == HIGH){
+    emergencyStartTime = millis();
+    Serial.println(F("sm button"));
+  } 
+  else if(button3State == LOW && lastButton3State == LOW){
+    if(millis() - emergencyStartTime >= emergencyTime){
+      emergencySMS();
+    }
+  }
+  lastButton3State = button3State;
+}
