@@ -1,6 +1,7 @@
 // Location tracking reported to a Phant server over GSM
 // RFID assets reported to a Phant server over GSM
 // LED and button controls
+// Emergency SMS sent on command
 //
 // Author: Braden Kallin
 //
@@ -72,6 +73,7 @@ const unsigned long tagTime       = 10000;
 // Misc vars
 bool lightsOn = false;
 bool emergencyFlag = false;
+bool bagPower = true;
 
 void setup() {
   // WDT because there's no reset button
@@ -135,53 +137,55 @@ void loop() {
 
   wdt_reset();
 
-  checkRFID();
-
   checkButtons();
 
-  if(lightsOn){
-    setStripColor(100,100,100);
-  }
-  else{
-    clearStrip();
-  }
+  if(bagPower){
+    checkRFID();
 
-  // Let the terminal know we're still running every few seconds
-  currentStatusMillis = millis();
-  if (currentStatusMillis - previousStatusMillis >= statusTime) {
-    Serial.println(F("Still running!"));
-    previousStatusMillis = currentStatusMillis;
-  }
-
-  // When a tag is read, wait a few seconds then update the database
-  if(tagFlag){
-    tagStartMillis = millis();
-    tagFlag = false;
-    tagTimerFlag = true;
-  }
-  if(tagTimerFlag && (millis() - tagStartMillis >= tagTime)){
-    for(uint8_t i = 0; i < 2; i++){ // try to update twice
-      if(postRFID()) break;
+    if(lightsOn){
+      setStripColor(100,100,100);
     }
-    tagTimerFlag = false;
-  }
+    else{
+      clearStrip();
+    }
 
-  // Update the location every few minutes
-  // Also reset the emergency flag if set
-  currentLocMillis = millis();
-  if (currentLocMillis - previousLocMillis >= updateLocTime) {
-    // Try 2 times to post location.
-    for (uint8_t i = 0; i < 2; i++) {
-      if (getLocation()) {
-        if (postLocation()) {
-          break;
-        }
+    // Let the terminal know we're still running every few seconds
+    currentStatusMillis = millis();
+    if (currentStatusMillis - previousStatusMillis >= statusTime) {
+      Serial.println(F("Still running!"));
+      previousStatusMillis = currentStatusMillis;
+    }
+
+    // When a tag is read, wait a few seconds then update the database
+    if(tagFlag){
+      tagStartMillis = millis();
+      tagFlag = false;
+      tagTimerFlag = true;
+    }
+    if(tagTimerFlag && (millis() - tagStartMillis >= tagTime)){
+      for(uint8_t i = 0; i < 2; i++){ // try to update twice
+        if(postRFID()) break;
       }
-      wdt_reset();
-      delay(1000);
+      tagTimerFlag = false;
     }
-    previousLocMillis = currentLocMillis;
-    emergencyFlag = false;
+
+    // Update the location every few minutes
+    // Also reset the emergency flag if set
+    currentLocMillis = millis();
+    if (currentLocMillis - previousLocMillis >= updateLocTime) {
+      // Try 2 times to post location.
+      for (uint8_t i = 0; i < 2; i++) {
+        if (getLocation()) {
+          if (postLocation()) {
+            break;
+          }
+        }
+        wdt_reset();
+        delay(1000);
+      }
+      previousLocMillis = currentLocMillis;
+      emergencyFlag = false;
+    }
   }
 
   // Check for lost bag mode every few seconds
@@ -419,21 +423,8 @@ bool postLocation(void) {
 void checkLostBag(void){
   int8_t numSMS = fona.getNumSMS();
   if(numSMS != 0){
-    for(uint8_t i = 0; i < 25; i++){
-      if(!emergencyFlag){
-        for(uint8_t j = 4; j > 0; j--){
-          uint8_t a, b, c;
-          a = i % 3;
-          b = (i+1) % 3;
-          c = (i+2) % 3;
-          
-          strip.setPixelColor(j-1, strip.Color(a*50,b*50,c*50));
-          strip.setPixelColor(7-j, strip.Color(a*50,b*50,c*50));
-          strip.show();
-          delay(100);
-          wdt_reset();
-        }
-      }
+    if(!emergencyFlag){ // Don't flash these lights in emergency mode
+      lostBagFlash();
     }
 
     clearStrip();
@@ -452,6 +443,28 @@ void clearStrip(void){
     strip.setPixelColor(i, strip.Color(0,0,0));
   }
   strip.show();
+}
+
+// Power lights
+void pwrLights(bool pwr){
+  if(pwr){
+    for(uint8_t i = 0; i < 4; i++){
+      strip.setPixelColor(3-i, strip.Color(0,0,40));
+      strip.setPixelColor(3+i, strip.Color(0,0,40));
+      strip.show();
+      delay(500);
+    }
+    clearStrip();
+  }
+  else{
+    setStripColor(40,0,0);
+    for(uint8_t i = 0; i < 4; i++){
+      strip.setPixelColor(6-i, strip.Color(0,0,0));
+      strip.setPixelColor(i, strip.Color(0,0,0));
+      strip.show();
+      delay(500);
+    }
+  }
 }
 
 // Blink the LED strip
@@ -504,6 +517,24 @@ void halt(const __FlashStringHelper *error) {
   Serial.println(error);
 }
 
+// Emanate colors from the center
+void lostBagFlash(void){
+for(uint8_t i = 0; i < 25; i++){
+    for(uint8_t j = 4; j > 0; j--){
+      uint8_t a, b, c;
+      a = i % 3;
+      b = (i+1) % 3;
+      c = (i+2) % 3;
+      
+      strip.setPixelColor(j-1, strip.Color(a*50,b*50,c*50));
+      strip.setPixelColor(7-j, strip.Color(a*50,b*50,c*50));
+      strip.show();
+      delay(100);
+      wdt_reset();
+    }
+  }
+}
+
 // ============================================================================
 // ============================== SETUP FUNCTIONS =============================
 // ============================================================================
@@ -517,8 +548,8 @@ void setupFONA(void) {
 
   if (FONA_PS == LOW) {
     digitalWrite(FONA_KEY, LOW);
-    delay(2100);
     wdt_reset();
+    delay(2100);
     digitalWrite(FONA_KEY, HIGH);
   }
 
@@ -544,7 +575,7 @@ void setupFONA(void) {
 
   wdt_reset();
   // Wait a little bit to stabilize the connection.
-  delay(1000);
+  delay(500);
   Serial.println(F("FONA setup OK!"));
 }
 
@@ -558,7 +589,8 @@ void setupRFID(void) {
     halt(F("Couldn't find FONA")); // halt
   }
   // Got ok data, print it out!
-  Serial.print(F("Found chip PN5")); Serial.println((versiondata >> 24) & 0xFF, HEX);
+  Serial.print(F("Found chip PN5")); 
+  Serial.println((versiondata >> 24) & 0xFF, HEX);
 
   // configure board to read RFID tags
   nfc.SAMConfig();
@@ -693,50 +725,74 @@ void emergencySMS(void){
 }
 
 void checkButtons(void){ 
-  uint8_t button1State = digitalRead(BUTTON1);
-  static uint8_t lastButton1State = HIGH;
-  uint8_t button2State = digitalRead(BUTTON4);
-  static uint8_t lastButton2State = HIGH;
-  uint8_t button3State = digitalRead(BUTTON3);
-  static uint8_t lastButton3State = HIGH;
+  uint8_t lightsButtonState = digitalRead(BUTTON1);
+  static uint8_t lastLightsButtonState = HIGH;
+  uint8_t emergencyButtonState = digitalRead(BUTTON4);
+  static uint8_t lastEmergencyButtonState = HIGH;
+  uint8_t stealthButtonState = digitalRead(BUTTON3);
+  static uint8_t lastStealthButtonState = HIGH;
   static unsigned long emergencyStartTime = 0;
   const unsigned long emergencyTime = 5000;
+  uint8_t powerButtonState = digitalRead(BUTTON2);
+  static uint8_t lastPowerButtonState = HIGH;
+  static unsigned long powerStartTime = 0;
+  const unsigned long powerTime = 5000;
 
-  // compare the buttonState to its previous state
-  if (button1State != lastButton1State) {
-    if (button1State == HIGH) {
+  // Bright lights button
+  if (lightsButtonState != lastLightsButtonState) {
+    if (lightsButtonState == HIGH) {
       lightsOn = !lightsOn;
     }
     // Delay a little bit to avoid bouncing
     delay(50);
   }
-  lastButton1State = button1State;
+  lastLightsButtonState = lightsButtonState;
 
-  if(button2State == LOW && lastButton2State == HIGH){
+  // Activate emergency mode if the button is held for a few seconds
+  if(emergencyButtonState == LOW && lastEmergencyButtonState == HIGH){
     emergencyStartTime = millis();
     Serial.println(F("em button"));
   } 
-  else if(button2State == LOW && lastButton2State == LOW){
+  else if(emergencyButtonState == LOW && lastEmergencyButtonState == LOW){
     if(millis() - emergencyStartTime >= emergencyTime){
-      setStripColor(255,0,0);
+      emergencyStartTime = millis();
+      setStripColor(255,0,0); // Strip is red while we try to send the SMS
       emergencySMS();
       for(uint8_t i = 0; i < 10; i++){
-        colorWipe(30,0,0);
+        colorWipe(30,0,0);    // Flash lights conspicuously
         colorWipe(0,0,30);
+        clearStrip();
         wdt_reset();
       }
     }
   }
-  lastButton2State = button2State;
+  lastEmergencyButtonState = emergencyButtonState;
 
-  if(button3State == LOW && lastButton3State == HIGH){
+  // Emergency mode with no lights
+  if(stealthButtonState == LOW && lastStealthButtonState == HIGH){
     emergencyStartTime = millis();
     Serial.println(F("sm button"));
   } 
-  else if(button3State == LOW && lastButton3State == LOW){
+  else if(stealthButtonState == LOW && lastStealthButtonState == LOW){
     if(millis() - emergencyStartTime >= emergencyTime){
+      emergencyStartTime = millis();
       emergencySMS();
     }
   }
-  lastButton3State = button3State;
+  lastStealthButtonState = stealthButtonState;
+
+  // A pseudo power button
+  if(powerButtonState == LOW && lastPowerButtonState == HIGH){
+    powerStartTime = millis();
+    Serial.println(F("pw button"));
+  } 
+  else if(powerButtonState == LOW && lastPowerButtonState == LOW){
+    if(millis() - powerStartTime >= powerTime){
+      powerStartTime = millis();
+      Serial.println(F("Bag pwr."));
+      bagPower = !bagPower;
+      pwrLights(bagPower);
+    }
+  }
+  lastPowerButtonState = powerButtonState;
 }
