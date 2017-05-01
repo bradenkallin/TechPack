@@ -18,12 +18,14 @@
 #include <SPI.h>
 #include <Wire.h>
 
-// Lights and buttons
-#define PIXEL_PIN 6
-#define BUTTON1 A0 // Push buttons
-#define BUTTON2 A1
-#define BUTTON3 A2
-#define BUTTON4 A3
+// Lights, buzzer and buttons 
+#define BUZZER_GND 4
+#define BUZZER     5
+#define PIXEL_PIN  6
+#define BUTTON1    A0 // Labled 3
+#define BUTTON2    A1 // Labled 1
+#define BUTTON3    A2 // Labled 2
+#define BUTTON4    A3 // Labled 4
 
 // Define I2C Pins for PN532
 #define PN532_IRQ   (2)
@@ -508,18 +510,13 @@ void colorWipe(uint8_t r, uint8_t g, uint8_t b){
   }
 }
 
-// Halt function called when an error occurs.  
-// Will print an error and stop execution
-void halt(const __FlashStringHelper *error) {
-  wdt_enable(WDTO_1S);
-  strip.setPixelColor(0, strip.Color(50,0,0));
-  strip.show();
-  Serial.println(error);
-}
-
 // Emanate colors from the center
+// Also beep a buzzer
 void lostBagFlash(void){
-for(uint8_t i = 0; i < 25; i++){
+  uint8_t pwrButtonState;
+  static uint8_t lastPwrButtonState = LOW;
+  
+  for(uint8_t i = 0; i < 25; i++){
     for(uint8_t j = 4; j > 0; j--){
       uint8_t a, b, c;
       a = i % 3;
@@ -532,7 +529,20 @@ for(uint8_t i = 0; i < 25; i++){
       delay(100);
       wdt_reset();
     }
+    if(i % 2 == 1){
+      digitalWrite(BUZZER, HIGH);
+    }
+    else{
+      digitalWrite(BUZZER, LOW);
+    }
+    pwrButtonState = digitalRead(BUTTON2); // Stop if the power button is pressed
+    
+    if(pwrButtonState == LOW && lastPwrButtonState == HIGH)
+      break;
+      
+    lastPwrButtonState = pwrButtonState;
   }
+  digitalWrite(BUZZER, LOW);
 }
 
 // ============================================================================
@@ -613,6 +623,10 @@ void setupIO(void){
   pinMode(BUTTON2, INPUT);
   pinMode(BUTTON3, INPUT);
   pinMode(BUTTON4, INPUT);
+  pinMode(BUZZER, OUTPUT);
+  pinMode(BUZZER_GND, OUTPUT);
+  digitalWrite(BUZZER, LOW);
+  digitalWrite(BUZZER_GND, LOW);
   digitalWrite(BUTTON1, INPUT_PULLUP);
   digitalWrite(BUTTON2, INPUT_PULLUP);
   digitalWrite(BUTTON3, INPUT_PULLUP);
@@ -651,6 +665,15 @@ void statusLights(uint8_t status){
 // ============================================================================
 // =============================== MISC FUNCTIONS =============================
 // ============================================================================
+
+// Halt function called when an error occurs.  
+// Will print an error and stop execution
+void halt(const __FlashStringHelper *error) {
+  wdt_enable(WDTO_1S);
+  strip.setPixelColor(0, strip.Color(50,0,0));
+  strip.show();
+  Serial.println(error);
+}
 
 void printFloat(float value, int places) {
   // this is used to cast digits
@@ -725,11 +748,11 @@ void emergencySMS(void){
 }
 
 void checkButtons(void){ 
-  uint8_t lightsButtonState = digitalRead(BUTTON1);
+  uint8_t lightsButtonState = digitalRead(BUTTON3);
   static uint8_t lastLightsButtonState = HIGH;
   uint8_t emergencyButtonState = digitalRead(BUTTON4);
   static uint8_t lastEmergencyButtonState = HIGH;
-  uint8_t stealthButtonState = digitalRead(BUTTON3);
+  uint8_t stealthButtonState = digitalRead(BUTTON1);
   static uint8_t lastStealthButtonState = HIGH;
   static unsigned long emergencyStartTime = 0;
   const unsigned long emergencyTime = 5000;
